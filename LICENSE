@@ -1,0 +1,45 @@
+PhoneCanDo release repository
+
+Copyright (c) 2026 Krishna Kushwaha. All rights reserved.
+
+This file says what covers the material in
+https://github.com/phonecando/distribution (the "release repository").
+
+1. The app's releases
+
+The PhoneCanDo app's files published in the release repository's releases
+(its APKs, update manifests, checksums and other builds) are the PhoneCanDo
+app. You install and use them only under the PhoneCanDo End User License
+Agreement, which the app shows you and asks you to accept, and which is
+published at https://phonecando.app/license/. This file grants nothing
+beyond it.
+
+2. Third-party sources
+
+The source archives of third-party components published in the release
+repository's releases keep their own licenses, as THIRD_PARTY_NOTICES.md in
+the app and at https://phonecando.app/licenses/ says. Nothing here restricts
+what those licenses let you do.
+
+3. This repository's files
+
+The workflows, scripts and other files in the release repository are
+published so you can see how the app's releases are built, signed and
+attested, and check them. You may view and study them, and fork the
+release repository on GitHub as GitHub's Terms of Service allow. No other
+right is granted: you may not copy, modify, run, share or reuse them, in
+whole or in part, or use them to train or fine-tune machine learning
+models, as data to test or benchmark them, or in a dataset, without written
+permission from the copyright holder. Every right not expressly granted is
+reserved.
+
+4. No warranty
+
+EVERYTHING IN THE RELEASE REPOSITORY IS PROVIDED "AS IS", WITHOUT WARRANTY
+OR CONDITION OF ANY KIND, EXPRESS OR IMPLIED. TO THE EXTENT THE LAW ALLOWS,
+THE COPYRIGHT HOLDER WILL NOT BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM IT OR ITS USE. Nothing here limits any liability or
+any right that the law does not allow to be limited or excluded.
+
+Indian law governs this file, and the courts of India have jurisdiction
+over any dispute about it.

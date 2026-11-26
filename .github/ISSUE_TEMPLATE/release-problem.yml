@@ -1,0 +1,36 @@
+name: Release problem
+description: A download, checksum, attestation or release workflow that's broken.
+labels: [release]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is for the releases themselves. A bug in the app, an agent request
+        or an idea goes to [phonecando/feedback](https://github.com/phonecando/feedback/issues/new/choose).
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What's wrong
+      options:
+        - A download is missing or won't open
+        - A checksum doesn't match
+        - gh attestation verify fails
+        - The in-app update can't find or fetch a release
+        - The release workflow failed
+        - Something else about a release
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Release
+      placeholder: v1.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran or clicked, and what you saw. Paste the command's output if there was one.
+    validations:
+      required: true

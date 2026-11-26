@@ -1,0 +1,102 @@
+name: Security
+
+# This repository holds the app's releases and the workflow that makes
+# them: its workflows are audited by zizmor and linted by actionlint (with
+# shellcheck), and gitleaks scans its whole history. Runs on pushes to main,
+# pull requests, weekly and on demand.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  zizmor:
+    name: Workflow audit (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # online audits read workflow/action metadata
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Findings go to code scanning (category "zizmor"), with online audits
+      # (impostor commits, known vulnerable actions) using the job token.
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+
+  actionlint:
+    name: actionlint (workflows + shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint (pinned + sha256-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/actionlint"
+          tgz="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/$tgz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tgz}"
+          echo "${ACTIONLINT_SHA256}  $dir/$tgz" | sha256sum --check --strict
+          tar -xzf "$dir/$tgz" -C "$dir"
+          echo "$dir" >> "$GITHUB_PATH"
+      # Without shellcheck actionlint silently skips run: scripts.
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          sc="$(command -v shellcheck)" || { echo "::error::no shellcheck on the runner"; exit 1; }
+          actionlint -color -shellcheck="$sc"
+      - name: shellcheck the release scripts
+        run: shellcheck --severity=warning .github/release/*.sh
+
+  gitleaks:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (all history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          tgz="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -fsSL --retry 3 -o "$tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${tgz}" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$tgz" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+      # Every commit on every fetched ref; findings are redacted.
+      - name: Scan full history
+        run: '"$RUNNER_TEMP/gitleaks-bin/gitleaks" git . --redact --no-banner --exit-code 1'

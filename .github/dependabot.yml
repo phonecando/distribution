@@ -1,0 +1,20 @@
+# Dependabot version updates for the release workflows' actions, monthly,
+# in one pull request (pinned SHAs and their version comments). Security
+# updates stay on (the repository's Dependabot security updates setting).
+# Each action waits 7 days after its release before it is proposed.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns: ['*']

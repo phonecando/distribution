@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A bug in the app, an agent request or an idea
+    url: https://github.com/phonecando/feedback/issues/new/choose
+    about: Everything about the app itself lives in phonecando/feedback.
+  - name: A security hole in how releases are built, signed or attested
+    url: https://github.com/phonecando/distribution/security/advisories/new
+    about: Report it privately, never in a public issue.

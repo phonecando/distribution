@@ -1,0 +1,5 @@
+# The age public key (one line, age1...) the release workflow seals each
+# job's logs to (seal-logs.sh); only its private half can open them. Until a
+# key line is here, the logs are deleted unread at the end of each job.
+# Make one with `age-keygen -o release-logs.key`, keep that file private, and
+# put the "Public key:" it prints on the next line.

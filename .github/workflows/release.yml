@@ -1,0 +1,449 @@
+name: Release
+
+# The only place PhoneCanDo app releases are made, and this repository's
+# releases are them. The app's code is in our private repository; its
+# phone-control/ folder is a submodule of phonecando/phone-control pinned at
+# one commit. This workflow checks the app out at the commit asked for, puts
+# phonecando/phone-control there at the commit the app pins (and stops unless
+# that commit is on phone-control's main, so only published code ships), and
+# runs the app's own release steps: `./manage release --ci <step>`. What a
+# step does is in the app's code; here are only the steps, the attestation
+# and the publishing, so the release runs on GitHub's runners, in the open.
+#
+#   prepare  the app's commit, the phone-control commit it pins, the gate's jobs
+#   gate     every check the app has, fast and full, in parallel jobs
+#   build    stage what the APKs ship (each binary checked by the hash the
+#            app's tree pins), build lite + full with the debug key, seal
+#            the stage for the sign job (RELEASE_STAGE_KEY, which only the
+#            two environments hold); runs beside the gate
+#   sign     once the gate is green: open the stage, sign. publish on: with
+#            our key, upload the draft, attest the APKs, the staged binaries'
+#            SHA256SUMS and the phone-control commit they were built with,
+#            publish. publish off (a rehearsal): with a throwaway key,
+#            nothing attested or uploaded
+#
+# Two environments, one approval. prepare, gate and build run in
+# `private-read` (no reviewer, main only): the GitHub App that reads the
+# app's repository (PRIVATE_APP_ID, PRIVATE_APP_KEY) and the stage's sealing
+# key (RELEASE_STAGE_KEY). sign runs in `release` (a required reviewer, main
+# only): the same three, and the four signing secrets. So the one approval
+# comes right before signing and publishing. The App's tokens read contents
+# only; build's may also read Actions, to check that the Default image's
+# lre-image run was green. A job's steps print only their name and passed or
+# failed; their output is sealed with age for us (.github/release/) and kept
+# 7 days as an artifact. Inputs reach the shell only through env, never
+# pasted into a script.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 1.0.0
+        required: true
+        type: string
+      notes:
+        description: Update dialog and release notes (empty means "Release v<version>")
+        required: false
+        default: ''
+        type: string
+      label:
+        description: What the release calls itself
+        required: false
+        default: stable
+        type: choice
+        options: [stable, beta, alpha]
+      publish:
+        description: Sign with our key, attest and publish. Off is a rehearsal (a throwaway key, nothing uploaded)
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: The app repository's branch or commit to release
+        required: false
+        default: prod
+        type: string
+
+permissions:
+  contents: read
+
+# One release at a time; never cancel one halfway through its uploads.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  APP_OWNER: krishna-kush
+  APP_REPO: PhoneCanDo
+  PHONE_CONTROL: phonecando/phone-control
+
+jobs:
+  prepare:
+    name: prepare
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: private-read
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+      phone-control: ${{ steps.pin.outputs.phone-control }}
+    env:
+      RELEASE_JOB: prepare
+    steps:
+      - name: This repository's release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: distribution
+          persist-credentials: false
+      - name: App token (read-only)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_APP_KEY }}
+          owner: ${{ env.APP_OWNER }}
+          repositories: ${{ env.APP_REPO }}
+          permission-contents: read
+      - name: Check out the app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.APP_OWNER }}/${{ env.APP_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ steps.token.outputs.token }}
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The phone-control commit the app pins
+        id: pin
+        run: bash distribution/.github/release/pin.sh read app
+      - name: Check out phone-control at it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PHONE_CONTROL }}
+          ref: ${{ steps.pin.outputs.phone-control }}
+          path: app/phone-control
+          fetch-depth: 0
+          persist-credentials: false
+      - name: That commit is on phone-control's main
+        env:
+          PINNED: ${{ steps.pin.outputs.phone-control }}
+        run: bash distribution/.github/release/pin.sh verify app "$PINNED"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: plan
+        id: plan
+        working-directory: app
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          LABEL: ${{ inputs.label }}
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_TARGET: ${{ github.sha }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: bash ../distribution/.github/release/step.sh plan ./manage release --ci plan
+      - name: Seal the logs
+        if: ${{ always() }}
+        run: bash distribution/.github/release/seal-logs.sh "$RUNNER_TEMP/sealed"
+      - name: Upload the sealed logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-logs-prepare
+          path: ${{ runner.temp }}/sealed/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  gate:
+    name: gate ${{ matrix.n }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    environment: private-read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.jobs) }}
+    env:
+      RELEASE_JOB: gate-${{ matrix.n }}
+    steps:
+      - name: This repository's release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: distribution
+          persist-credentials: false
+      - name: App token (read-only)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_APP_KEY }}
+          owner: ${{ env.APP_OWNER }}
+          repositories: ${{ env.APP_REPO }}
+          permission-contents: read
+      - name: Check out the app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.APP_OWNER }}/${{ env.APP_REPO }}
+          ref: ${{ needs.prepare.outputs.sha }}
+          token: ${{ steps.token.outputs.token }}
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out phone-control at the commit the app pins
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PHONE_CONTROL }}
+          ref: ${{ needs.prepare.outputs.phone-control }}
+          path: app/phone-control
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      # No Gradle cache: a cache here could be restored by another workflow.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+      - name: checks
+        working-directory: app
+        env:
+          N: ${{ matrix.n }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash ../distribution/.github/release/step.sh checks ./manage release --ci gate "$N"
+      - name: Seal the logs
+        if: ${{ always() }}
+        run: bash distribution/.github/release/seal-logs.sh "$RUNNER_TEMP/sealed"
+      - name: Upload the sealed logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-logs-gate-${{ matrix.n }}
+          path: ${{ runner.temp }}/sealed/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: build (no key)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: private-read
+    outputs:
+      stage-sha256: ${{ steps.build.outputs.stage-sha256 }}
+    env:
+      RELEASE_JOB: build
+    steps:
+      - name: This repository's release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: distribution
+          persist-credentials: false
+      - name: App token (read-only)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_APP_KEY }}
+          owner: ${{ env.APP_OWNER }}
+          repositories: ${{ env.APP_REPO }}
+          permission-contents: read
+          # The Default image's lock names the lre-image run that built it:
+          # the preflight checks that run was green.
+          permission-actions: read
+      - name: Check out the app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.APP_OWNER }}/${{ env.APP_REPO }}
+          ref: ${{ needs.prepare.outputs.sha }}
+          token: ${{ steps.token.outputs.token }}
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out phone-control at the commit the app pins
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PHONE_CONTROL }}
+          ref: ${{ needs.prepare.outputs.phone-control }}
+          path: app/phone-control
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+      - name: build
+        id: build
+        working-directory: app
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          LABEL: ${{ inputs.label }}
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_TARGET: ${{ github.sha }}
+          GITHUB_REPO: ${{ github.repository }}
+          PHONE_CONTROL_COMMIT: ${{ needs.prepare.outputs.phone-control }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          STAGE_SECRET: ${{ secrets.RELEASE_STAGE_KEY }}
+        run: bash ../distribution/.github/release/step.sh build ./manage release --ci build "$RUNNER_TEMP/stage.sealed"
+      - name: Upload the sealed stage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-stage
+          path: ${{ runner.temp }}/stage.sealed
+          retention-days: 1
+          if-no-files-found: error
+      - name: Seal the logs
+        if: ${{ always() }}
+        run: bash distribution/.github/release/seal-logs.sh "$RUNNER_TEMP/sealed"
+      - name: Upload the sealed logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-logs-build
+          path: ${{ runner.temp }}/sealed/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  sign:
+    name: ${{ inputs.publish && 'sign, attest and publish' || 'sign (rehearsal)' }}
+    needs: [prepare, gate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      # The draft release and its assets.
+      contents: write
+      # Deleting the sealed stage once signed.
+      actions: write
+      # Attesting the signed APKs: a Sigstore certificate for this run, the
+      # attestation and its storage record.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      RELEASE_JOB: sign
+    steps:
+      - name: This repository's release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: distribution
+          persist-credentials: false
+      - name: App token (read-only)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_APP_KEY }}
+          owner: ${{ env.APP_OWNER }}
+          repositories: ${{ env.APP_REPO }}
+          permission-contents: read
+      - name: Check out the app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.APP_OWNER }}/${{ env.APP_REPO }}
+          ref: ${{ needs.prepare.outputs.sha }}
+          token: ${{ steps.token.outputs.token }}
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out phone-control at the commit the app pins
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PHONE_CONTROL }}
+          ref: ${{ needs.prepare.outputs.phone-control }}
+          path: app/phone-control
+          persist-credentials: false
+      # Node only: no package install, so no third-party code runs next to the key.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Download the sealed stage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-stage
+          path: ${{ runner.temp }}/stage
+      # The signing secrets reach only a release that publishes; a rehearsal
+      # makes its own throwaway key.
+      - name: sign
+        working-directory: app
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          LABEL: ${{ inputs.label }}
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_TARGET: ${{ github.sha }}
+          GITHUB_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          STAGE_SECRET: ${{ secrets.RELEASE_STAGE_KEY }}
+          STAGE_SHA256: ${{ needs.build.outputs.stage-sha256 }}
+          RELEASE_OUT: ${{ runner.temp }}/release-out
+          PHONECANDO_STORE_BASE64: ${{ inputs.publish && secrets.PHONECANDO_STORE_BASE64 || '' }}
+          PHONECANDO_STORE_PASSWORD: ${{ inputs.publish && secrets.PHONECANDO_STORE_PASSWORD || '' }}
+          PHONECANDO_KEY_ALIAS: ${{ inputs.publish && secrets.PHONECANDO_KEY_ALIAS || '' }}
+          PHONECANDO_KEY_PASSWORD: ${{ inputs.publish && secrets.PHONECANDO_KEY_PASSWORD || '' }}
+        run: bash ../distribution/.github/release/step.sh sign ./manage release --ci sign "$RUNNER_TEMP/stage/stage.sealed"
+      # The exact files the draft carries: both APKs, the SHA256SUMS of the
+      # binaries built elsewhere that they carry, and the phone-control
+      # commit they were built with. Anyone can check a download with
+      # `gh attestation verify <file> --repo <this repo>`.
+      - name: Attest the release files
+        if: ${{ inputs.publish }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release-out/*
+      # Only once attested, so a published release never names an
+      # attestation that is not there.
+      - name: Publish
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release edit "v$VERSION" --draft=false -R "$GITHUB_REPOSITORY"
+      # Sealed, but no reason to keep it once signed, or once failed.
+      - name: Delete the sealed stage
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            -q '.artifacts[] | select(.name == "release-stage") | .id')"
+          for id in $ids; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"; done
+      - name: Seal the logs
+        if: ${{ always() }}
+        run: bash distribution/.github/release/seal-logs.sh "$RUNNER_TEMP/sealed"
+      - name: Upload the sealed logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-logs-sign
+          path: ${{ runner.temp }}/sealed/
+          retention-days: 7
+          if-no-files-found: ignore
