@@ -3,3 +3,4 @@
 # key line is here, the logs are deleted unread at the end of each job.
 # Make one with `age-keygen -o release-logs.key`, keep that file private, and
 # put the "Public key:" it prints on the next line.
+age1yqe2y8e5eqhdh4nh2806vzy92gdz9uku74cf2unchd9g04plwcaq4j0lnq
