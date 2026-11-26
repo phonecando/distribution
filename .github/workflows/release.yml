@@ -146,6 +146,8 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
           RELEASE_TARGET: ${{ github.sha }}
           GITHUB_REPO: ${{ github.repository }}
+          # The preflight reads the Default image's release in the app's repository.
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: bash ../distribution/.github/release/step.sh plan ./manage release --ci plan
       - name: Seal the logs
         if: ${{ always() }}
