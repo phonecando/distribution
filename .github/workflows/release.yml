@@ -24,7 +24,7 @@ name: Release
 #
 # Two environments, one approval. prepare, gate and build run in
 # `private-read` (no reviewer, main only): the GitHub App that reads the
-# app's repository (PRIVATE_APP_ID, PRIVATE_APP_KEY) and the stage's sealing
+# app's repository (PRIVATE_APP_CLIENT_ID, PRIVATE_APP_KEY) and the stage's sealing
 # key (RELEASE_STAGE_KEY). sign runs in `release` (a required reviewer, main
 # only): the same three, and the four signing secrets. So the one approval
 # comes right before signing and publishing. The App's tokens read contents
@@ -103,7 +103,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          client-id: ${{ secrets.PRIVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_APP_KEY }}
           owner: ${{ env.APP_OWNER }}
           repositories: ${{ env.APP_REPO }}
@@ -183,7 +183,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          client-id: ${{ secrets.PRIVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_APP_KEY }}
           owner: ${{ env.APP_OWNER }}
           repositories: ${{ env.APP_REPO }}
@@ -259,7 +259,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          client-id: ${{ secrets.PRIVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_APP_KEY }}
           owner: ${{ env.APP_OWNER }}
           repositories: ${{ env.APP_REPO }}
@@ -360,7 +360,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.PRIVATE_APP_ID }}
+          client-id: ${{ secrets.PRIVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_APP_KEY }}
           owner: ${{ env.APP_OWNER }}
           repositories: ${{ env.APP_REPO }}
